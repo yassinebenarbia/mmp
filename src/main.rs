@@ -1,9 +1,73 @@
-use std::{collections::HashMap, env};
+use std::io;
+use std::env;
 use copypasta::{ClipboardContext, ClipboardProvider};
 use rand::distributions::{Alphanumeric, DistString};
+use sha2::{Sha256, Digest};
 use std::fs;
-use serde_yaml::{Deserializer, Mapping, Sequence, Serializer, Value};
+use serde_yaml::{Mapping, Value};
 use serde::{Serialize, Deserialize};
+use orion::aead;
+
+
+fn encrypt_pfile() {
+    let mut KEY = String::new();
+    println!("Write your encryption key: ...");
+    io::stdin().read_line(&mut KEY).expect("failed to readline");
+    // hashing the key
+    let mut hasher = Sha256::new();
+    hasher.update(KEY);
+    let hashed_key = hasher.finalize();
+    // creating a secret key
+    let secret_key = aead::SecretKey::from_slice(hashed_key.as_slice()).unwrap();
+    // encrypting file content
+    let content = read_pfile();
+    let ciphertext = aead::seal(&secret_key, content.as_slice()).unwrap();
+    // println!("{}", String::from_utf8(ciphertext).unwrap());
+    // writing encrypted content to file 
+    let mut pwds_path = std::env::var("HOME").unwrap();
+    pwds_path.push_str("/.local/share/mmp/pwd.yaml");
+    fs::write(pwds_path, ciphertext).unwrap();
+    println!("Passwords file encrypted successfully");
+}
+
+fn decrypt_pfile() {
+    let mut KEY = String::new();
+    println!("Write your decryption key: ");
+    io::stdin().read_line(&mut KEY).expect("failed to readline");
+    // hashing the key
+    let mut hasher = Sha256::new();
+    hasher.update(KEY);
+    let hashed_key = hasher.finalize();
+    // reading file content
+    let content = read_pfile();
+    // creating a secret key
+    let secret_key = aead::SecretKey::from_slice(hashed_key.as_slice()).unwrap();
+    // decrypt file with key
+    let decrypted_data = aead::open(&secret_key, &content);
+    match decrypted_data {
+        Ok(decrypted_data) => {
+            write_pfile(String::from_utf8(decrypted_data).unwrap());
+            println!("Passwords file decrypted successfully");
+        },
+        Err(_) => {
+            println!("Error: Couldn't decrypt file");
+            println!("File propably alredy decrypted, try the 'list' option to check");
+        },
+    }
+}
+
+fn read_pfile() -> Vec<u8> {
+    let mut pwds_path = std::env::var("HOME").unwrap();
+    pwds_path.push_str("/.local/share/mmp/pwd.yaml");
+    let file_content = std::fs::read(pwds_path).unwrap();
+    return file_content
+}
+
+fn write_pfile(content: String) {
+    let mut pwds_path = std::env::var("HOME").unwrap();
+    pwds_path.push_str("/.local/share/mmp/pwd.yaml");
+    fs::write(pwds_path, content).unwrap();
+}
 
 
 fn main() {
@@ -11,26 +75,20 @@ fn main() {
     args.remove(0);
     handle_args(args);
 }
-fn default_password() -> Value {
-    let map = Mapping::new();
-    return Value::Sequence(vec![]);
-}
 
-fn default_path() -> String {
-    String::new()
+fn default_password() -> Value {
+    return Value::Sequence(vec![]);
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Default)]
 struct Format {
     #[serde(default = "default_password")]
     passwords: Value,
-    #[serde(default = "default_path")]
-    path: String
 }
 
+/// creates a new password linked with the tag
 fn create(tag: &String) {
-    let string = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-    let f = fs::read("pwd.yaml").unwrap();
+    let f = read_pfile();
     let things: Format = serde_yaml::from_slice(&f).unwrap_or(Format::default());
     match things.passwords {
         Value::Sequence(mut sequence) => {
@@ -46,28 +104,31 @@ fn create(tag: &String) {
                     },
                     _ => {
                         println!("Error: Unexpected passwords list format!");
+                        println!("Check if file is encrypted, or file format convention is not adhered");
                         return;
                     }
                 }
             }
             let mut map = Mapping::new();
-            map.insert(Value::String(tag.to_owned()), Value::String(string));
+            let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+            map.insert(Value::String(tag.to_owned()), Value::String(password));
             sequence.push(Value::Mapping(map));
             let format = Format {
                 passwords: Value::Sequence(sequence),
-                path: things.path 
             };
-            let string_format = serde_yaml::to_string(&format).unwrap();
-            fs::write("pwd.yaml", string_format).unwrap();
+            let pfile_content = serde_yaml::to_string(&format).unwrap();
+            write_pfile(pfile_content);
         },
         _ => {
             println!("Error: Unexpected passwords list format!");
+            println!("Check if file is encrypted, or file format convention is not adhered");
         }
     }
 }
 
-fn copy(tag: &String){
-    let f = fs::read("pwd.yaml").unwrap();
+/// copy the password that is linked with the tag to clipboard
+fn copy(tag: &String) {
+    let f = read_pfile();
     let things: Format = serde_yaml::from_slice(&f).unwrap_or(Format::default());
     match things.passwords {
         Value::Sequence(sequence) => {
@@ -94,12 +155,16 @@ fn copy(tag: &String){
             println!("Error: Password key does not exist!");
             return;
         },
-        _ => todo!(),
+        _ => {
+            println!("Error: Unexpected passwords list format!");
+            println!("Check if file is encrypted, or file format convention is not adhered");
+        },
     }
 }
 
+/// delete the password related with the tag
 fn delete(tag: &String) {
-    let f = fs::read("pwd.yaml").unwrap();
+    let f = read_pfile();
     let mut found = false;
     let things: Format = serde_yaml::from_slice(&f).unwrap_or(Format::default());
     match things.passwords {
@@ -121,10 +186,9 @@ fn delete(tag: &String) {
             if found {
                 let format = Format {
                     passwords: Value::Sequence(sequence),
-                    path: things.path 
                 };
-                let string_format = serde_yaml::to_string(&format).unwrap();
-                fs::write("pwd.yaml", string_format).unwrap();
+                let pfile_content = serde_yaml::to_string(&format).unwrap();
+                write_pfile(pfile_content);
             }else {
                 println!("Error: Tag does not exist!");
                 println!("The provided tag '{}' does not exist, try another one!", tag.clone());
@@ -132,21 +196,20 @@ fn delete(tag: &String) {
         },
         _ => {
             println!("Error: Unexpected passwords list format!");
+            println!("Check if file is encrypted, or file format convention is not adhered");
         }
     }
 }
-fn list(){
-    let f = fs::read("pwd.yaml").unwrap();
+
+
+/// list all passwords with their tags
+fn list() {
+    let f = read_pfile();
     let things: Format = serde_yaml::from_slice(&f).unwrap_or(Format::default());
-    if things.path.is_empty() {
-        println!("No path provided!")
-    }else {
-            println!("path: {}", things.path)
-    }
     match things.passwords {
         Value::Sequence(s) => {
             if s.is_empty() {
-                            println!("No passwords generated!");
+                println!("No passwords generated!");
             }
             for i in s.iter() {
                 match i {
@@ -171,7 +234,10 @@ fn list(){
 
             }
         },
-        _ => {}
+        _ => {
+            println!("Error: Unexpected passwords list format!");
+            println!("Check if file is encrypted, or file format convention is not adhered");
+        }
     }
 }
 
@@ -181,6 +247,8 @@ fn handle_args(args: Vec<String>) {
         String::from("copy"),
         String::from("delete"),
         String::from("list"),
+        String::from("encrypt"),
+        String::from("decrypt"),
     ];
     let empty = String::from("");
     let action = args.get(0).unwrap_or(&empty);
@@ -217,6 +285,12 @@ fn handle_args(args: Vec<String>) {
             "list" => {
                 list();
             }
+            "encrypt" => {
+                encrypt_pfile();
+            }
+            "decrypt" => {
+                decrypt_pfile();
+            }
             _ => {}
         };
     }else {
@@ -229,21 +303,5 @@ fn handle_args(args: Vec<String>) {
             println!("Expected one of {:?}, but got {}", actions, action);
             return;
         }
-        return;
-    }
-}
-mod Test {
-    use copypasta::{ClipboardContext, ClipboardProvider};
-    #[test]
-    fn test1() {
-        let mut ctx = ClipboardContext::new().unwrap();
-
-        let msg = "Hello, world!";
-        ctx.set_contents(msg.to_owned()).unwrap();
-
-        let content = ctx.get_contents().unwrap();
-
-        println!("{}", content);
-
     }
 }
