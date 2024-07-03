@@ -22,7 +22,6 @@ fn encrypt_pfile() {
     // encrypting file content
     let content = read_pfile();
     let ciphertext = aead::seal(&secret_key, content.as_slice()).unwrap();
-    // println!("{}", String::from_utf8(ciphertext).unwrap());
     // writing encrypted content to file 
     let mut pwds_path = std::env::var("HOME").unwrap();
     pwds_path.push_str("/.local/share/mmp/pwd.yaml");
@@ -201,7 +200,6 @@ fn delete(tag: &String) {
     }
 }
 
-
 /// list all passwords with their tags
 fn list() {
     let f = read_pfile();
@@ -241,6 +239,58 @@ fn list() {
     }
 }
 
+fn help(tag: &String) {
+    let actions = vec![
+        String::from("create"),
+        String::from("copy"),
+        String::from("delete"),
+        String::from("list"),
+        String::from("encrypt"),
+        String::from("decrypt"),
+        String::from("help"),
+    ];
+
+    if actions.contains(tag) {
+        match tag.as_str() {
+            "create" => {
+                println!("Creates a password linked with a tag that can be retrived later");
+                println!("Schema: `mmp create <Tag>`");
+            }
+            "copy" => {
+                println!("Copys the password linked with the tag to your clipboard");
+                println!("Schema: `mmp copy <Tag>`");
+            }
+            "delete" => {
+                println!("Deletes the password related with the tag");
+                println!("Schema: `mmp delete <Tag>`");
+            }
+            "list" => {
+                println!("List all saved passwords with their related tags");
+                println!("Schema: `mmp list`");
+            }
+            "encrypt" => {
+                println!("Encrypt the file that contains all your saved password");
+                println!("Schema: `mmp encrypt`");
+                println!("Note: All other actions wont work after using it, except `decrypt`");
+            }
+            "decrypt" => {
+                println!("Decrypt the file that contains all your saved passwords");
+                println!("Schema: `mmp delete <Tag>`");
+            }
+            "help" => {
+                println!("Are you for real :|");
+            }
+            _ => {
+                println!("Tag does not exist!");
+                println!("Try one of the following options: {:?}", actions);
+            }
+        }
+    }else {
+        println!("Action does not exist!");
+        println!("Try one of the following options: {:?}", actions);
+    }
+}
+
 fn handle_args(args: Vec<String>) {
     let actions = vec![
         String::from("create"),
@@ -249,6 +299,7 @@ fn handle_args(args: Vec<String>) {
         String::from("list"),
         String::from("encrypt"),
         String::from("decrypt"),
+        String::from("help"),
     ];
     let empty = String::from("");
     let action = args.get(0).unwrap_or(&empty);
@@ -291,16 +342,22 @@ fn handle_args(args: Vec<String>) {
             "decrypt" => {
                 decrypt_pfile();
             }
+            "help" => {
+                let tag = args.get(1).unwrap_or(&empty);
+                help(tag);
+            },
             _ => {}
         };
     }else {
         if action.is_empty() {
             println!("Error: Argument not provided!");
             println!("Expected one of {:?}, but got {}", actions, "none");
+            println!("Try `mmp help` to learn how to use `mmp`");
             return;
         }else {
             println!("Error: Uncorrect argument!");
             println!("Expected one of {:?}, but got {}", actions, action);
+            println!("Try `mmp help` to learn how to use `mmp`");
             return;
         }
     }
