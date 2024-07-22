@@ -1,18 +1,23 @@
+use std::fs::OpenOptions;
 use std::io;
 use std::env;
+use std::path::Path;
 use copypasta::{ClipboardContext, ClipboardProvider};
 use rand::distributions::{Alphanumeric, DistString};
 use sha2::{Sha256, Digest};
+use termion::input::TermRead;
 use std::fs;
 use serde_yaml::{Mapping, Value};
 use serde::{Serialize, Deserialize};
 use orion::aead;
+use std::io::prelude::*;
 
 
 fn encrypt_pfile() {
-    let mut KEY = String::new();
     println!("Write your encryption key: ...");
-    io::stdin().read_line(&mut KEY).expect("failed to readline");
+    let KEY = TermRead::read_passwd(&mut io::stdin(), &mut io::stdout())
+        .unwrap().unwrap();
+    println!("KEY: {}", KEY);
     // hashing the key
     let mut hasher = Sha256::new();
     hasher.update(KEY);
@@ -30,9 +35,12 @@ fn encrypt_pfile() {
 }
 
 fn decrypt_pfile() {
-    let mut KEY = String::new();
+    // let mut KEY = String::new();
     println!("Write your decryption key: ");
-    io::stdin().read_line(&mut KEY).expect("failed to readline");
+    let KEY = TermRead::read_passwd(&mut io::stdin(), &mut io::stdout())
+        .unwrap().unwrap();
+    println!("KEY: {}", KEY);
+    // io::stdin().read_line(&mut KEY).expect("failed to readline");
     // hashing the key
     let mut hasher = Sha256::new();
     hasher.update(KEY);
@@ -45,7 +53,10 @@ fn decrypt_pfile() {
     let decrypted_data = aead::open(&secret_key, &content);
     match decrypted_data {
         Ok(decrypted_data) => {
-            write_pfile(String::from_utf8(decrypted_data).unwrap());
+            println!("{:?}", decrypted_data);
+            let decrypted_string: String = decrypted_data.iter().map(|&value| value as u8 as char).collect();
+            println!("{}", decrypted_string.clone());
+            write_pfile(decrypted_string);
             println!("Passwords file decrypted successfully");
         },
         Err(_) => {
@@ -56,16 +67,47 @@ fn decrypt_pfile() {
 }
 
 fn read_pfile() -> Vec<u8> {
-    let mut pwds_path = std::env::var("HOME").unwrap();
-    pwds_path.push_str("/.local/share/mmp/pwd.yaml");
-    let file_content = std::fs::read(pwds_path).unwrap();
-    return file_content
+    let mut home_path = std::env::var("HOME").unwrap();
+    let path =  "/.local/share/mmp/";
+    let file_name = "pwd.yaml";
+    home_path.push_str(path);
+    // if path does not exist
+    if !Path::new(&home_path.clone()).exists() {
+        fs::create_dir_all(&home_path.clone()).unwrap();
+    } 
+    home_path.push_str(file_name);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .read(true)
+        .create(true)
+        .open(home_path.clone())
+        .unwrap();
+    let mut content = vec![]; 
+    file.read_to_end(&mut content).unwrap();
+    return content
 }
 
 fn write_pfile(content: String) {
-    let mut pwds_path = std::env::var("HOME").unwrap();
-    pwds_path.push_str("/.local/share/mmp/pwd.yaml");
-    fs::write(pwds_path, content).unwrap();
+    let mut home_path = std::env::var("HOME").unwrap();
+    let path =  "/.local/share/mmp/";
+    let file_name = "pwd.yaml";
+    home_path.push_str(path);
+    // if path does not exist
+    if !Path::new(&home_path.clone()).exists() {
+        fs::create_dir_all(&home_path.clone()).unwrap();
+    } 
+    home_path.push_str(file_name);
+    // createing hte file if does not eixt
+    OpenOptions::new()
+        .write(true)
+        .read(true)
+        .create(true)
+        .open(home_path.clone())
+        .unwrap();
+    // writing to the file
+    // NOTE: using the ouput of OpenOptions to write to file 
+    // results in an error.
+    fs::write(home_path, content).unwrap();
 }
 
 
@@ -282,11 +324,13 @@ fn help(tag: &String) {
             }
             _ => {
                 println!("Tag does not exist!");
+                println!("Schema: `mmp help <subcommand>`");
                 println!("Try one of the following options: {:?}", actions);
             }
         }
     }else {
-        println!("Action does not exist!");
+        println!("Tag does not exist!");
+        println!("Schema: `mmp help <subcommand>`");
         println!("Try one of the following options: {:?}", actions);
     }
 }
