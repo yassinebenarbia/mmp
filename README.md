@@ -1,4 +1,4 @@
-# My Password Manager
+# Manage My Passwords
 > Use at your own risk
 ___
 ## About
