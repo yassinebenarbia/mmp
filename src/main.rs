@@ -4,6 +4,8 @@
 // TODO: support X11 users with `clipboard-rs`
 use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand};
+use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
 use orion::aead;
 use rand::distributions::{Alphanumeric, DistString};
 use regex::Regex;
@@ -24,7 +26,7 @@ fn main() {
     App::new(Cli::parse()).run();
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Default, Clone)]
 struct Metadata {
     date: Option<SystemTime>,
     text: Option<String>,
@@ -45,7 +47,7 @@ impl From<&CreateArgs> for Metadata {
     }
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Default, Clone)]
 struct PasswordEntry {
     password: String,
     metadata: Metadata,
@@ -63,6 +65,43 @@ struct Format {
 }
 
 impl Format {
+    fn list_sorted_by_levenshtein<'a>(
+        &'a self,
+        target: &'a str,
+    ) -> Vec<(&'a String, &'a PasswordEntry)> {
+        let matcher = SkimMatcherV2::default();
+
+        let re = Regex::new(target).ok();
+
+        // scored: (key, value, total_score)
+        let mut scored: Vec<(&String, &PasswordEntry, i64)> =
+            Vec::with_capacity(self.passwords.len());
+
+        for (k, v) in &self.passwords {
+            // (text = k, pattern = target).
+            if let Some((skim_score, _indices)) = matcher.fuzzy_indices(&k, target) {
+                // start with skim_score
+                let mut total_score = skim_score;
+
+                // Add regex match bonus if the regex compiled and matches the key.
+                if let Some(ref rex) = re {
+                    if let Some(mat) = rex.find(&k) {
+                        let match_len = (mat.end() - mat.start()) as i64;
+                        let start = mat.start() as i64;
+                        let bonus = 10_000 + match_len * 100 - start * 5;
+                        total_score += bonus;
+                    }
+                }
+
+                scored.push((&k, &v, total_score));
+            }
+        }
+
+        scored.sort_by(|a, b| a.2.cmp(&b.2));
+
+        scored.into_iter().map(|(k, v, _)| (k, v)).collect()
+    }
+
     fn exist(&self, entry: &String) -> bool {
         self.passwords.get(entry).is_some()
     }
@@ -86,6 +125,8 @@ struct CreateArgs {
 #[command(args_conflicts_with_subcommands = true)]
 #[command(flatten_help = true)]
 struct ListArgs {
+    #[arg(required = false)]
+    regex: Option<String>,
     #[arg(long, action = clap::ArgAction::SetTrue)]
     with_date: bool,
     #[arg(long, action = clap::ArgAction::SetTrue)]
@@ -103,16 +144,6 @@ impl ListArgs {
     }
     fn with_url(&self) -> bool {
         self.with_url
-    }
-}
-
-impl Default for ListArgs {
-    fn default() -> Self {
-        Self {
-            with_date: Default::default(),
-            with_text: Default::default(),
-            with_url: Default::default(),
-        }
     }
 }
 
@@ -270,27 +301,52 @@ impl App {
                 return;
             }
 
-            for (name, entry) in file.passwords {
-                println!("name: {}", name);
-                println!("  password : {}", entry.password); // never show full?
-                let metadata = entry.metadata;
-                if let Some(date) = metadata.date
-                    && args.with_date()
-                {
-                    let datetime: DateTime<Utc> = date.into();
-                    println!("  date : {}", datetime.to_rfc2822());
+            if let Some(regex) = &args.regex {
+                for (name, entry) in file.list_sorted_by_levenshtein(&regex) {
+                    println!("name: {}", name);
+                    println!("  password : {}", entry.password); // never show full?
+                    let metadata = &entry.metadata;
+                    if let Some(date) = metadata.date
+                        && args.with_date()
+                    {
+                        let datetime: DateTime<Utc> = date.into();
+                        println!("  date : {}", datetime.to_rfc2822());
+                    }
+                    if let Some(url) = &metadata.url
+                        && args.with_url()
+                    {
+                        println!("  url : {}", url);
+                    }
+                    if let Some(text) = &metadata.text
+                        && args.with_text()
+                    {
+                        println!("  text: {}", text);
+                    }
+                    println!();
                 }
-                if let Some(url) = metadata.url
-                    && args.with_url()
-                {
-                    println!("  url : {}", url);
+            } else {
+                for (name, entry) in file.passwords {
+                    println!("name: {}", name);
+                    println!("  password : {}", entry.password); // never show full?
+                    let metadata = entry.metadata;
+                    if let Some(date) = metadata.date
+                        && args.with_date()
+                    {
+                        let datetime: DateTime<Utc> = date.into();
+                        println!("  date : {}", datetime.to_rfc2822());
+                    }
+                    if let Some(url) = metadata.url
+                        && args.with_url()
+                    {
+                        println!("  url : {}", url);
+                    }
+                    if let Some(text) = metadata.text
+                        && args.with_text()
+                    {
+                        println!("  text: {}", text);
+                    }
+                    println!();
                 }
-                if let Some(text) = metadata.text
-                    && args.with_text()
-                {
-                    println!("  text: {}", text);
-                }
-                println!();
             }
         }
     }
