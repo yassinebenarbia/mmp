@@ -1,408 +1,565 @@
+// TODO: move from this dogshit format to using struct
+// TODO: use clap
+// TODO: support regex
+// TODO: support X11 users with `clipboard-rs`
+use chrono::{DateTime, Utc};
+use clap::{Args, Parser, Subcommand};
+use orion::aead;
+use rand::distributions::{Alphanumeric, DistString};
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::fs;
 use std::fs::OpenOptions;
 use std::io;
-use std::env;
-use std::path::Path;
-use copypasta::{ClipboardContext, ClipboardProvider};
-use rand::distributions::{Alphanumeric, DistString};
-use sha2::{Sha256, Digest};
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::SystemTime;
 use termion::input::TermRead;
-use std::fs;
-use serde_yaml::{Mapping, Value};
-use serde::{Serialize, Deserialize};
-use orion::aead;
-use std::io::prelude::*;
 
-
-fn encrypt_pfile() {
-    println!("Write your encryption key: ...");
-    let KEY = TermRead::read_passwd(&mut io::stdin(), &mut io::stdout())
-        .unwrap().unwrap();
-    println!("KEY: {}", KEY);
-    // hashing the key
-    let mut hasher = Sha256::new();
-    hasher.update(KEY);
-    let hashed_key = hasher.finalize();
-    // creating a secret key
-    let secret_key = aead::SecretKey::from_slice(hashed_key.as_slice()).unwrap();
-    // encrypting file content
-    let content = read_pfile();
-    let ciphertext = aead::seal(&secret_key, content.as_slice()).unwrap();
-    // writing encrypted content to file 
-    let mut pwds_path = std::env::var("HOME").unwrap();
-    pwds_path.push_str("/.local/share/mmp/pwd.yaml");
-    fs::write(pwds_path, ciphertext).unwrap();
-    println!("Passwords file encrypted successfully");
+fn main() {
+    App::new(Cli::parse()).run();
 }
 
-fn decrypt_pfile() {
-    // let mut KEY = String::new();
-    println!("Write your decryption key: ");
-    let KEY = TermRead::read_passwd(&mut io::stdin(), &mut io::stdout())
-        .unwrap().unwrap();
-    println!("KEY: {}", KEY);
-    // io::stdin().read_line(&mut KEY).expect("failed to readline");
-    // hashing the key
-    let mut hasher = Sha256::new();
-    hasher.update(KEY);
-    let hashed_key = hasher.finalize();
-    // reading file content
-    let content = read_pfile();
-    // creating a secret key
-    let secret_key = aead::SecretKey::from_slice(hashed_key.as_slice()).unwrap();
-    // decrypt file with key
-    let decrypted_data = aead::open(&secret_key, &content);
-    match decrypted_data {
-        Ok(decrypted_data) => {
-            println!("{:?}", decrypted_data);
-            let decrypted_string: String = decrypted_data.iter().map(|&value| value as u8 as char).collect();
-            println!("{}", decrypted_string.clone());
-            write_pfile(decrypted_string);
-            println!("Passwords file decrypted successfully");
-        },
-        Err(_) => {
-            println!("Error: Couldn't decrypt file");
-            println!("File propably alredy decrypted, try the 'list' option to check");
-        },
+#[derive(Debug, PartialEq, Serialize, Deserialize, Default)]
+struct Metadata {
+    date: Option<SystemTime>,
+    text: Option<String>,
+    url: Option<String>,
+}
+
+impl From<&CreateArgs> for Metadata {
+    fn from(value: &CreateArgs) -> Self {
+        Self {
+            url: value.url.clone(),
+            text: value.text.clone(),
+            date: if value.with_date {
+                Some(SystemTime::now())
+            } else {
+                None
+            },
+        }
     }
 }
 
-fn read_pfile() -> Vec<u8> {
-    let mut home_path = std::env::var("HOME").unwrap();
-    let path =  "/.local/share/mmp/";
-    let file_name = "pwd.yaml";
-    home_path.push_str(path);
-    // if path does not exist
-    if !Path::new(&home_path.clone()).exists() {
-        fs::create_dir_all(&home_path.clone()).unwrap();
-    } 
-    home_path.push_str(file_name);
-    let mut file = OpenOptions::new()
-        .write(true)
-        .read(true)
-        .create(true)
-        .open(home_path.clone())
-        .unwrap();
-    let mut content = vec![]; 
-    file.read_to_end(&mut content).unwrap();
-    return content
+#[derive(Debug, PartialEq, Serialize, Deserialize, Default)]
+struct PasswordEntry {
+    password: String,
+    metadata: Metadata,
 }
 
-fn write_pfile(content: String) {
-    let mut home_path = std::env::var("HOME").unwrap();
-    let path =  "/.local/share/mmp/";
-    let file_name = "pwd.yaml";
-    home_path.push_str(path);
-    // if path does not exist
-    if !Path::new(&home_path.clone()).exists() {
-        fs::create_dir_all(&home_path.clone()).unwrap();
-    } 
-    home_path.push_str(file_name);
-    // createing hte file if does not eixt
-    OpenOptions::new()
-        .write(true)
-        .read(true)
-        .create(true)
-        .open(home_path.clone())
-        .unwrap();
-    // writing to the file
-    // NOTE: using the ouput of OpenOptions to write to file 
-    // results in an error.
-    fs::write(home_path, content).unwrap();
-}
-
-
-fn main() {
-    let mut args: Vec<String> = env::args().collect();
-    args.remove(0);
-    handle_args(args);
-}
-
-fn default_password() -> Value {
-    return Value::Sequence(vec![]);
+impl PasswordEntry {
+    fn new(password: String, metadata: Metadata) -> Self {
+        Self { password, metadata }
+    }
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Default)]
 struct Format {
-    #[serde(default = "default_password")]
-    passwords: Value,
+    passwords: HashMap<String, PasswordEntry>,
 }
 
-/// creates a new password linked with the tag
-fn create(tag: &String) {
-    let f = read_pfile();
-    let things: Format = serde_yaml::from_slice(&f).unwrap_or(Format::default());
-    match things.passwords {
-        Value::Sequence(mut sequence) => {
-            // checkinf if key already exist
-            for element in sequence.iter() {
-                match element.to_owned() {
-                    Value::Mapping(map) => {
-                        if map.get(tag.clone()) != None {
-                            println!("Error: Already existing tag!");
-                            println!("The provided tag '{}' already exist, try another one!", tag.clone());
-                            return;
-                        }
-                    },
-                    _ => {
-                        println!("Error: Unexpected passwords list format!");
-                        println!("Check if file is encrypted, or file format convention is not adhered");
-                        return;
-                    }
-                }
-            }
-            let mut map = Mapping::new();
-            let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-            map.insert(Value::String(tag.to_owned()), Value::String(password));
-            sequence.push(Value::Mapping(map));
-            let format = Format {
-                passwords: Value::Sequence(sequence),
-            };
-            let pfile_content = serde_yaml::to_string(&format).unwrap();
-            write_pfile(pfile_content);
-        },
-        _ => {
-            println!("Error: Unexpected passwords list format!");
-            println!("Check if file is encrypted, or file format convention is not adhered");
+impl Format {
+    fn exist(&self, entry: &String) -> bool {
+        self.passwords.get(entry).is_some()
+    }
+}
+
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+#[command(flatten_help = true)]
+struct CreateArgs {
+    #[arg(value_name = "TAG")]
+    tag: String,
+    #[arg(value_name = "date", long, action = clap::ArgAction::SetTrue)]
+    with_date: bool,
+    #[arg(value_name = "text", long)]
+    text: Option<String>,
+    #[arg(value_name = "url", long)]
+    url: Option<String>,
+}
+
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+#[command(flatten_help = true)]
+struct ListArgs {
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    with_date: bool,
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    with_text: bool,
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    with_url: bool,
+}
+
+impl ListArgs {
+    fn with_date(&self) -> bool {
+        self.with_date
+    }
+    fn with_text(&self) -> bool {
+        self.with_text
+    }
+    fn with_url(&self) -> bool {
+        self.with_url
+    }
+}
+
+impl Default for ListArgs {
+    fn default() -> Self {
+        Self {
+            with_date: Default::default(),
+            with_text: Default::default(),
+            with_url: Default::default(),
         }
     }
 }
 
-/// copy the password that is linked with the tag to clipboard
-fn copy(tag: &String) {
-    let f = read_pfile();
-    let things: Format = serde_yaml::from_slice(&f).unwrap_or(Format::default());
-    match things.passwords {
-        Value::Sequence(sequence) => {
-            for sequence_elem in sequence {
-                match sequence_elem {
-                    Value::Mapping(map) => {
-                        let pwd_opt = map.get(tag);
-                        if let Some(pwd) = pwd_opt {
-                            if let Value::String(pwd) = pwd {
-                                let mut ctx = ClipboardContext::new().unwrap();
-                                ctx.set_contents(pwd.to_owned()).unwrap();
-                                let _ = ctx.get_contents().unwrap();
-                                println!("Password moved to system clipboard");
-                                return;
-                            }else {
-                                println!("Error: Unkown password format!");
-                                return;
-                            }
-                        }
-                    },
-                    _ => todo!(),
-                }
-            }
-            println!("Error: Password key does not exist!");
-            return;
-        },
-        _ => {
-            println!("Error: Unexpected passwords list format!");
-            println!("Check if file is encrypted, or file format convention is not adhered");
-        },
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+#[command(flatten_help = true)]
+struct GetArgs {
+    #[arg(value_name = "TAG")]
+    tag: String,
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    with_date: bool,
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    with_text: bool,
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    with_url: bool,
+}
+
+impl GetArgs {
+    fn with_date(&self) -> bool {
+        self.with_date
+    }
+    fn with_text(&self) -> bool {
+        self.with_text
+    }
+    fn with_url(&self) -> bool {
+        self.with_url
     }
 }
 
-/// delete the password related with the tag
-fn delete(tag: &String) {
-    let f = read_pfile();
-    let mut found = false;
-    let things: Format = serde_yaml::from_slice(&f).unwrap_or(Format::default());
-    match things.passwords {
-        Value::Sequence(mut sequence) => {
-            sequence.retain(|v| { match v {
-                    Value::Mapping(map) => {
-                        if let Some(_) = map.get(tag) {
-                            found = true;
-                            return false;
-                        }else {
-                            return true;
-                        }
-                    }
-                    _ => {
-                        return false;
-                    }
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+#[command(flatten_help = true)]
+struct DeleteArgs {
+    #[arg(value_name = "TAG")]
+    tag: String,
+}
+
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+#[command(flatten_help = true)]
+struct CopyArgs {
+    #[arg(value_name = "TAG")]
+    tag: String,
+    #[arg(required = false, long)]
+    _tag: bool,
+}
+
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+#[command(flatten_help = true)]
+#[group(multiple = false)]
+struct EncryptArgs {
+    #[arg(required = false, long)]
+    key: Option<String>,
+    #[arg(required = false, long)]
+    key_file: Option<String>,
+}
+
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+#[command(flatten_help = true)]
+#[group(multiple = false)]
+struct DecryptArgs {
+    #[arg(required = false, long)]
+    key: Option<String>,
+    #[arg(required = false, long)]
+    key_file: Option<String>,
+}
+
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+#[command(flatten_help = true)]
+#[group(multiple = true)]
+struct UpdateArgs {
+    #[arg(value_name = "TAG")]
+    tag: String,
+    #[arg(long)]
+    with_date: bool,
+    #[arg(long)]
+    text: Option<String>,
+    #[arg(long)]
+    url: Option<String>,
+    #[arg(long)]
+    with_password: Option<String>,
+}
+
+#[derive(Debug, Parser)]
+#[command(name = "mmp")]
+#[command(about = "Personal Password Manager", long_about = None, version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+    #[arg(required = false, long, default_value_t = String::from("~/.local/share/mmp/"))]
+    pwd_path: String,
+    #[arg(required = false, long, default_value_t = String::from("pwd.yaml"))]
+    pwd_name: String,
+}
+
+#[derive(Debug, Subcommand)]
+enum Commands {
+    #[command(arg_required_else_help = false)]
+    Create(CreateArgs),
+    #[command(arg_required_else_help = false)]
+    List(ListArgs),
+    #[command(arg_required_else_help = false)]
+    Copy(CopyArgs),
+    #[command(arg_required_else_help = false)]
+    Get(GetArgs),
+    #[command(arg_required_else_help = false)]
+    Delete(DeleteArgs),
+    #[command(arg_required_else_help = false)]
+    Encrypt(EncryptArgs),
+    #[command(arg_required_else_help = false)]
+    Decrypt(DecryptArgs),
+    #[command(arg_required_else_help = false)]
+    Update(UpdateArgs),
+}
+
+struct App {
+    cli: Cli,
+}
+
+impl App {
+    fn new(cli: Cli) -> Self {
+        Self { cli }
+    }
+
+    fn create(&self) {
+        if let Commands::Create(args) = &self.cli.command {
+            {
+                let mut file = self.read_with_format();
+                if file.passwords.get(&args.tag).is_some() {
+                    eprintln!("Error: Already existing tag!");
+                    eprintln!(
+                        "The provided tag '{}' already exist, try another one!",
+                        args.tag.clone()
+                    );
+                    return;
                 }
-            });
-            if found {
-                let format = Format {
-                    passwords: Value::Sequence(sequence),
-                };
-                let pfile_content = serde_yaml::to_string(&format).unwrap();
-                write_pfile(pfile_content);
-            }else {
-                println!("Error: Tag does not exist!");
-                println!("The provided tag '{}' does not exist, try another one!", tag.clone());
+
+                let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+                let metadata = Metadata::from(args);
+                file.passwords
+                    .insert(args.tag.clone(), PasswordEntry::new(password, metadata));
+                self.write(&file);
             }
-        },
-        _ => {
-            println!("Error: Unexpected passwords list format!");
-            println!("Check if file is encrypted, or file format convention is not adhered");
         }
     }
-}
 
-/// list all passwords with their tags
-fn list() {
-    let f = read_pfile();
-    let things: Format = serde_yaml::from_slice(&f).unwrap_or(Format::default());
-    match things.passwords {
-        Value::Sequence(s) => {
-            if s.is_empty() {
+    fn list(&self) {
+        if let Commands::List(args) = &self.cli.command {
+            let file = self.read_with_format();
+            if file.passwords.is_empty() {
                 println!("No passwords generated!");
+                return;
             }
-            for i in s.iter() {
-                match i {
-                    Value::Mapping(m) => {
-                        for v in m {
-                            match v.0 {
-                                Value::String(s) => {
-                                    print!("{}: ", s);
-                                },
-                                _ => {}
-                            }
-                            match v.1 {
-                                Value::String(s) => {
-                                    println!("{:?}", s);
-                                },
-                                _ => {}
-                            }
-                        }
-                    },
-                    _ => {}
-                }
 
+            for (name, entry) in file.passwords {
+                println!("name: {}", name);
+                println!("  password : {}", entry.password); // never show full?
+                let metadata = entry.metadata;
+                if let Some(date) = metadata.date
+                    && args.with_date()
+                {
+                    let datetime: DateTime<Utc> = date.into();
+                    println!("  date : {}", datetime.to_rfc2822());
+                }
+                if let Some(url) = metadata.url
+                    && args.with_url()
+                {
+                    println!("  url : {}", url);
+                }
+                if let Some(text) = metadata.text
+                    && args.with_text()
+                {
+                    println!("  text: {}", text);
+                }
+                println!();
             }
-        },
-        _ => {
-            println!("Error: Unexpected passwords list format!");
-            println!("Check if file is encrypted, or file format convention is not adhered");
         }
     }
-}
 
-fn help(tag: &String) {
-    let actions = vec![
-        String::from("create"),
-        String::from("copy"),
-        String::from("delete"),
-        String::from("list"),
-        String::from("encrypt"),
-        String::from("decrypt"),
-        String::from("help"),
-    ];
+    fn run(&self) {
+        match &self.cli.command {
+            Commands::Create(_) => self.create(),
+            Commands::List(_) => self.list(),
+            Commands::Get(_) => self.get(),
+            Commands::Delete(_) => self.delete(),
+            Commands::Copy(_) => self.copy(),
+            Commands::Encrypt(_) => self.encrypt(),
+            Commands::Decrypt(_) => self.decrypt(),
+            Commands::Update(_) => self.update(),
+        }
+    }
 
-    if actions.contains(tag) {
-        match tag.as_str() {
-            "create" => {
-                println!("Creates a password linked with a tag that can be retrived later");
-                println!("Schema: `mmp create <Tag>`");
+    fn get(&self) {
+        if let Commands::Get(args) = &self.cli.command {
+            let file = self.read_with_format();
+            if file.passwords.is_empty() {
+                println!("No passwords generated!");
+                return;
             }
-            "copy" => {
-                println!("Copys the password linked with the tag to your clipboard");
-                println!("Schema: `mmp copy <Tag>`");
-            }
-            "delete" => {
-                println!("Deletes the password related with the tag");
-                println!("Schema: `mmp delete <Tag>`");
-            }
-            "list" => {
-                println!("List all saved passwords with their related tags");
-                println!("Schema: `mmp list`");
-            }
-            "encrypt" => {
-                println!("Encrypt the file that contains all your saved password");
-                println!("Schema: `mmp encrypt`");
-                println!("Note: All other actions wont work after using it, except `decrypt`");
-            }
-            "decrypt" => {
-                println!("Decrypt the file that contains all your saved passwords");
-                println!("Schema: `mmp delete <Tag>`");
-            }
-            "help" => {
-                println!("Are you for real :|");
-            }
-            _ => {
-                println!("Tag does not exist!");
-                println!("Schema: `mmp help <subcommand>`");
-                println!("Try one of the following options: {:?}", actions);
+            let re = Regex::new(&args.tag).unwrap();
+            if let Some((name, entry)) = file
+                .passwords
+                .iter()
+                .filter(|(k, _)| re.is_match(k))
+                .min_by_key(|(k, _)| k.len())
+            {
+                println!("name: {}", name);
+                println!("  password : {}", entry.password); // never show full?
+                let metadata = &entry.metadata;
+                if let Some(date) = metadata.date
+                    && args.with_date()
+                {
+                    let datetime: DateTime<Utc> = date.into();
+                    println!("  date : {}", datetime.to_rfc2822());
+                }
+                if let Some(url) = &metadata.url
+                    && args.with_url()
+                {
+                    println!("  url : {}", url);
+                }
+                if let Some(text) = &metadata.text
+                    && args.with_text()
+                {
+                    println!("  text: {}", text);
+                }
+                println!();
             }
         }
-    }else {
-        println!("Tag does not exist!");
-        println!("Schema: `mmp help <subcommand>`");
-        println!("Try one of the following options: {:?}", actions);
     }
-}
 
-fn handle_args(args: Vec<String>) {
-    let actions = vec![
-        String::from("create"),
-        String::from("copy"),
-        String::from("delete"),
-        String::from("list"),
-        String::from("encrypt"),
-        String::from("decrypt"),
-        String::from("help"),
-    ];
-    let empty = String::from("");
-    let action = args.get(0).unwrap_or(&empty);
+    fn delete(&self) {
+        if let Commands::Delete(args) = &self.cli.command {
+            if args.tag.is_empty() {
+                eprintln!("Error: Missing tag!");
+                eprintln!("Expected a tag name after 'mmp delete' , but got None");
+                return;
+            }
+            let mut file = self.read_with_format();
+            if !file.exist(&args.tag) {
+                eprintln!("Error: Tag does not exist!");
+                eprintln!("Entry `{}` does not exist", args.tag);
+                return;
+            }
+            file.passwords.remove(&args.tag);
+            self.write(&file);
+        }
+    }
 
-    if actions.contains(&action) {
-        match action.as_str() {
-            "create" => {
-                let tag = args.get(1).unwrap_or(&empty);
-                if tag.is_empty() {
-                    println!("Error: Missing tag!");
-                    println!("Expected a tag name after 'mmp create' , but got None");
-                    return;
-                }
-                create(tag);
-            },
-            "copy" => {
-                let tag = args.get(1).unwrap_or(&empty);
-                if tag.is_empty() {
-                    println!("Error: Missing tag!");
-                    println!("Expected a tag name after 'mmp copy' , but got None");
-                    return;
-                }
-                copy(tag);
-            },
-            "delete" => {
-                let tag = args.get(1).unwrap_or(&empty);
-                if tag.is_empty() {
-                    println!("Error: Missing tag!");
-                    println!("Expected a tag name after 'mmp delete' , but got None");
-                    return;
-                }
-                delete(tag);
-            },
-            "list" => {
-                list();
+    fn copy(&self) {
+        if let Commands::Copy(args) = &self.cli.command {
+            if args.tag.is_empty() {
+                eprintln!("Error: Missing tag!");
+                eprintln!("Expected a tag name after 'mmp delete' , but got None");
+                return;
             }
-            "encrypt" => {
-                encrypt_pfile();
+            let file = self.read_with_format();
+            if let Some(entry) = file.passwords.get(&args.tag) {
+                let target = if args._tag {
+                    args.tag.clone()
+                } else {
+                    entry.password.clone()
+                };
+                let mut command = Command::new("wl-copy").arg(target).spawn().unwrap();
+                let status = command.wait().unwrap();
+                if status.success() {
+                    println!("Password copied successfully to clipboard!");
+                } else {
+                    eprintln!("Error: Couldn't copy password to clipboard");
+                    eprintln!("Tip: Consier copying the password manually from the terminal");
+                }
+            } else {
+                eprintln!("Error: Tag does not exist!");
+                eprintln!("Entry `{}` does not exist", args.tag);
+                return;
             }
-            "decrypt" => {
-                decrypt_pfile();
+        }
+    }
+
+    fn encrypt(&self) {
+        if let Commands::Encrypt(args) = &self.cli.command {
+            let mut buffer = String::new();
+            let key = if let Some(key) = &args.key {
+                key.clone()
+            } else if let Some(key_file) = &args.key_file {
+                std::fs::read_to_string(key_file).unwrap()
+            } else if atty::isnt(atty::Stream::Stdin) {
+                io::stdin().read_to_string(&mut buffer).unwrap();
+                buffer
+            } else {
+                println!("Input your encryption key:");
+                TermRead::read_passwd(&mut io::stdin(), &mut io::stdout())
+                    .unwrap()
+                    .unwrap()
+            };
+            println!("{}", key);
+
+            // hashing the key
+            let mut hasher = Sha256::new();
+            hasher.update(key);
+            let hashed_key = hasher.finalize();
+            // creating a secret key
+            let secret_key = aead::SecretKey::from_slice(hashed_key.as_slice()).unwrap();
+            // encrypting file content
+            let content = self.read();
+            let ciphertext = aead::seal(&secret_key, content.as_slice()).unwrap();
+            // writing encrypted content to file
+            let mut pwds_path = std::env::var("HOME").unwrap();
+            // TODO: change this to something defined in self instead
+            pwds_path.push_str("/.local/share/mmp/pwd.yaml");
+            fs::write(pwds_path, ciphertext).unwrap();
+            println!("Passwords file encrypted successfully");
+        }
+    }
+
+    fn decrypt(&self) {
+        if let Commands::Decrypt(args) = &self.cli.command {
+            let mut buffer = String::new();
+            let key = if let Some(key) = &args.key {
+                key.clone()
+            } else if let Some(key_file) = &args.key_file {
+                std::fs::read_to_string(key_file).unwrap()
+            } else if atty::isnt(atty::Stream::Stdin) {
+                io::stdin().read_to_string(&mut buffer).unwrap();
+                buffer
+            } else {
+                println!("Input your encryption key:");
+                TermRead::read_passwd(&mut io::stdin(), &mut io::stdout())
+                    .unwrap()
+                    .unwrap()
+            };
+
+            // hashing the key
+            let mut hasher = Sha256::new();
+            hasher.update(key);
+            let hashed_key = hasher.finalize();
+            // reading file content
+            let content = self.read();
+            // creating a secret key
+            let secret_key = aead::SecretKey::from_slice(hashed_key.as_slice()).unwrap();
+            // decrypt file with key
+            let decrypted_data = aead::open(&secret_key, &content);
+            match decrypted_data {
+                Ok(decrypted_data) => {
+                    let decrypted_string: String = decrypted_data
+                        .iter()
+                        .map(|&value| value as u8 as char)
+                        .collect();
+                    self.write_str(&decrypted_string);
+                    println!("Passwords file decrypted successfully");
+                }
+                Err(_) => {
+                    println!("Error: Couldn't decrypt file");
+                    println!("File propably alredy decrypted, try the 'list' option to check");
+                }
             }
-            "help" => {
-                let tag = args.get(1).unwrap_or(&empty);
-                help(tag);
-            },
-            _ => {}
-        };
-    }else {
-        if action.is_empty() {
-            println!("Error: Argument not provided!");
-            println!("Expected one of {:?}, but got {}", actions, "none");
-            println!("Try `mmp help` to learn how to use `mmp`");
-            return;
-        }else {
-            println!("Error: Uncorrect argument!");
-            println!("Expected one of {:?}, but got {}", actions, action);
-            println!("Try `mmp help` to learn how to use `mmp`");
-            return;
+        }
+    }
+
+    fn join_dir_name<P: AsRef<Path>, N: AsRef<Path>>(dir: P, name: N) -> PathBuf {
+        let mut p = PathBuf::from(dir.as_ref());
+        p.push(name);
+        p
+    }
+
+    fn dirs_home() -> Option<PathBuf> {
+        if let Ok(home) = std::env::var("HOME") {
+            return Some(PathBuf::from(home));
+        }
+        None
+    }
+
+    fn expand_tilde(path: &str) -> PathBuf {
+        if let Some(stripped) = path.strip_prefix("~/") {
+            if let Some(home) = Self::dirs_home() {
+                return home.join(stripped);
+            }
+        }
+        PathBuf::from(path)
+    }
+
+    fn read(&self) -> Vec<u8> {
+        let dir = Self::expand_tilde(&self.cli.pwd_path.clone());
+        let file_name = self.cli.pwd_name.clone();
+        let path = Self::join_dir_name(&dir, &file_name);
+        let _ = std::fs::create_dir_all(&path);
+
+        let mut file = OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create(true)
+            .open(&path)
+            .unwrap();
+        let mut content = vec![];
+        file.read_to_end(&mut content).unwrap();
+        content
+    }
+
+    fn read_with_format(&self) -> Format {
+        serde_yaml::from_slice(&self.read()).unwrap()
+    }
+
+    fn write_str(&self, content: &str) {
+        let dir = Self::expand_tilde(&self.cli.pwd_path.clone());
+        let file_name = self.cli.pwd_name.clone();
+        let path = Self::join_dir_name(&dir, &file_name);
+        let _ = std::fs::create_dir_all(&path);
+        // createing hte file if does not eixt
+        OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create(true)
+            .open(&path)
+            .unwrap();
+        // writing to the file
+        fs::write(&path, content).unwrap();
+    }
+
+    fn write(&self, content: &Format) {
+        let new_file_content = serde_yaml::to_string(&content).unwrap();
+        self.write_str(&new_file_content);
+    }
+
+    fn update(&self) {
+        if let Commands::Update(args) = &self.cli.command {
+            let mut format = self.read_with_format();
+            if let Some(pwd) = format.passwords.get_mut(&args.tag) {
+                if let Some(text) = &args.text {
+                    pwd.metadata.text = Some(text.clone());
+                }
+                if let Some(url) = &args.url {
+                    pwd.metadata.url = Some(url.clone());
+                }
+                if args.with_date {
+                    pwd.metadata.date = Some(SystemTime::now());
+                }
+                if let Some(password) = &args.with_password {
+                    pwd.password = password.clone();
+                } else if atty::isnt(atty::Stream::Stdin) {
+                    let mut buffer = String::new();
+                    io::stdin().read_to_string(&mut buffer).unwrap();
+                    pwd.password = buffer;
+                }
+            }
+            self.write(&format);
         }
     }
 }
