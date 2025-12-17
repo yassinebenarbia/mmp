@@ -2,32 +2,41 @@
 > Use at your own risk
 ___
 ## About
-This is my Password manager, it stores your password in a optionaly symetrically encrypted file along with their equivalent *Tag*, this tag could be used later to retrieve the password of your need.    
+This is my Password manager, it stores your password in a optionaly symetrically encrypted file along with their equivalent *Tag* and some *Metadata*, this tag could be used later to retrieve the password of your need.    
 
-The can be will be encrypted with a key provided by the user using the `encrypt` subcommand, and decrypted by the exact same key using the `decrypt` subcommand.  
+passwords can be encrypted with a key provided by the user using the `encrypt` subcommand, and decrypted using the `decrypt` subcommand.
 ## Usage
-- Create a password   
-`mmp create <tag>`      
--- Example: `mmp create facebook` // creates a password by the tag "Facebook"
-- Copy a password to the clipboard  
-`mmp copy <tag>`  
--- Example: `mmp copy facebook` // copys the password with the tag "Facebook" to clipboard
-- Delete a password  
-`mmp delete <tag>`    
--- Example: `mmp delete facebook` // deletes the password with the tage "facebook" from the passwords file
-- List all passwors with their respective tags  
-`mmp list`    
--- Example: `mmp list` // self-evident
-- Encrypt passwords file  
-`mmp encrypt`    
--- Example: `mmp encrypt` // prompt you to insert an encryption key that will be used to encrypt all your passwords
-- Decrypt passwords file  
-`mmp decrypt`  
--- Example: `mmp encrypt` // prompt you to insert the decryption key to decrypt your passwords  
-- Display help page for a specific subcommand  
-`mmp help <subcommand>`   
--- example: `mmp help create` // displays the help page of the "create" subcommand
+If you have nix installed, you can try:
+```nix
+nix run --impure
+
+```
+and you'll get as output:
+
+```
+Personal Password Manager
+
+Usage: mmp [OPTIONS] <COMMAND>
+
+Commands:
+  create   Creates a password given a tag
+  list     List available passwords, won't work if passwords list is encrypted
+  copy     Copys the password with the tag to clipboard
+  get      Prints the password entry with tag that matches the closes to regex input
+  delete   Deletes the password entry that matches the exact tag input
+  encrypt  Encrypts a passowrds using key
+  decrypt  Decrypts encrypted passowrds using key
+  update   changes info (metadata/password) of an entry with the exact tag input
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --pwd-path <PWD_PATH>  Path to passwords file [default: ~/.local/share/mmp/]
+      --pwd-name <PWD_NAME>  Name of the passwords file [default: pwd.yaml]
+  -h, --help                 Print help
+  -V, --version              Print version
+```
+You can run `mmp [OPTION] --help` for more info about each option
 
 ## _Notes_ 
 > - All subcommands except `decrypt` can't be used unless the file is decrypted by the user.    
-> - All passwords will be stored on the `~/.local/share/mmp/pwd.yaml`, if the file does not exist, it will be created.
+> - All passwords will be stored on the `~/.local/share/mmp/pwd.yaml`, if the file does not exist, it will be created unless specified otherwise by the `--pwd-path` and `--pwd-name` options.
