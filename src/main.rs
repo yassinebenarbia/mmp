@@ -111,12 +111,16 @@ impl Format {
 #[command(args_conflicts_with_subcommands = true)]
 #[command(flatten_help = true)]
 struct CreateArgs {
+    /// Tag of the password to create
     #[arg(value_name = "TAG")]
     tag: String,
+    /// Add current date to metadata
     #[arg(value_name = "date", long, action = clap::ArgAction::SetTrue)]
     with_date: bool,
+    /// Add text to metadata
     #[arg(value_name = "text", long)]
     text: Option<String>,
+    /// Add url to metadata
     #[arg(value_name = "url", long)]
     url: Option<String>,
 }
@@ -125,12 +129,16 @@ struct CreateArgs {
 #[command(args_conflicts_with_subcommands = true)]
 #[command(flatten_help = true)]
 struct ListArgs {
+    /// Regex of the password entry
     #[arg(required = false)]
     regex: Option<String>,
+    /// Show date of the passowrd entry
     #[arg(long, action = clap::ArgAction::SetTrue)]
     with_date: bool,
+    /// Show text of the passowrd entry
     #[arg(long, action = clap::ArgAction::SetTrue)]
     with_text: bool,
+    /// Show url of the passowrd entry
     #[arg(long, action = clap::ArgAction::SetTrue)]
     with_url: bool,
 }
@@ -151,12 +159,16 @@ impl ListArgs {
 #[command(args_conflicts_with_subcommands = true)]
 #[command(flatten_help = true)]
 struct GetArgs {
+    /// Regex of the target tag to show
     #[arg(value_name = "TAG")]
     tag: String,
+    /// Show date of the passowrd entry
     #[arg(long, action = clap::ArgAction::SetTrue)]
     with_date: bool,
+    /// Show text of the passowrd entry
     #[arg(long, action = clap::ArgAction::SetTrue)]
     with_text: bool,
+    /// Show url of the passowrd entry
     #[arg(long, action = clap::ArgAction::SetTrue)]
     with_url: bool,
 }
@@ -177,6 +189,7 @@ impl GetArgs {
 #[command(args_conflicts_with_subcommands = true)]
 #[command(flatten_help = true)]
 struct DeleteArgs {
+    /// Tag of the target passowrd to delete
     #[arg(value_name = "TAG")]
     tag: String,
 }
@@ -185,8 +198,10 @@ struct DeleteArgs {
 #[command(args_conflicts_with_subcommands = true)]
 #[command(flatten_help = true)]
 struct CopyArgs {
+    /// Tag of the target passowrd
     #[arg(value_name = "TAG")]
     tag: String,
+    /// Copy tag instead of password to clipboard
     #[arg(required = false, long)]
     _tag: bool,
 }
@@ -196,8 +211,10 @@ struct CopyArgs {
 #[command(flatten_help = true)]
 #[group(multiple = false)]
 struct EncryptArgs {
+    /// Key used to encrypt passowrds
     #[arg(required = false, long)]
     key: Option<String>,
+    /// Key file used to encrypt passowrds
     #[arg(required = false, long)]
     key_file: Option<String>,
 }
@@ -207,8 +224,10 @@ struct EncryptArgs {
 #[command(flatten_help = true)]
 #[group(multiple = false)]
 struct DecryptArgs {
+    /// Key used to encrypt passowrds
     #[arg(required = false, long)]
     key: Option<String>,
+    /// Key file used to encrypt passowrds
     #[arg(required = false, long)]
     key_file: Option<String>,
 }
@@ -218,14 +237,19 @@ struct DecryptArgs {
 #[command(flatten_help = true)]
 #[group(multiple = true)]
 struct UpdateArgs {
+    /// Tag of the target password to update
     #[arg(value_name = "TAG")]
     tag: String,
+    /// Update date of the password metadata to current date
     #[arg(long)]
     with_date: bool,
+    /// Update text of the password metadata
     #[arg(long)]
     text: Option<String>,
+    /// Update url of the password metadata
     #[arg(long)]
     url: Option<String>,
+    /// Update password of the password metadata
     #[arg(long)]
     with_password: Option<String>,
 }
@@ -236,28 +260,54 @@ struct UpdateArgs {
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+    /// Path to passwords file
     #[arg(required = false, long, default_value_t = String::from("~/.local/share/mmp/"))]
     pwd_path: String,
+    /// Name of the passwords file
     #[arg(required = false, long, default_value_t = String::from("pwd.yaml"))]
     pwd_name: String,
 }
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Creates a password given a tag
     #[command(arg_required_else_help = false)]
     Create(CreateArgs),
+    /// List available passwords, won't work if passwords list is encrypted
     #[command(arg_required_else_help = false)]
     List(ListArgs),
+    /// Copys the password with the tag to clipboard
     #[command(arg_required_else_help = false)]
     Copy(CopyArgs),
+    /// Prints the password entry with tag that matches the closes to regex input
     #[command(arg_required_else_help = false)]
     Get(GetArgs),
+    /// Deletes the password entry that matches the exact tag input
     #[command(arg_required_else_help = false)]
     Delete(DeleteArgs),
-    #[command(arg_required_else_help = false)]
+    /// Encrypts a passowrds using key
+    #[command(
+        arg_required_else_help = false,
+        after_help = r#"
+EXAMPLES:
+  mmp encryt --key "AB2FA..."
+  mmp encryt --key-file key.txt
+  cat key.txt | mmp encrypt
+"#
+    )]
     Encrypt(EncryptArgs),
-    #[command(arg_required_else_help = false)]
+    /// Decrypts encrypted passowrds using key
+    #[command(
+        arg_required_else_help = false,
+        after_help = r#"
+EXAMPLES:
+  mmp decrypt --key "AB2FA..."
+  mmp decrypt --key-file key.txt
+  cat key.txt | mmp decrypt
+"#
+    )]
     Decrypt(DecryptArgs),
+    /// changes info (metadata/password) of an entry with the exact tag input
     #[command(arg_required_else_help = false)]
     Update(UpdateArgs),
 }
