@@ -201,6 +201,12 @@ struct CopyArgs {
     /// Tag of the target passowrd
     #[arg(value_name = "TAG")]
     tag: String,
+    /// Custom to copy to clipbard, default to `wl-copy`
+    #[arg(required = false, value_name = "COMMAND")]
+    command: Option<String>,
+    /// Custom args to copy command, only effective when `command` is added
+    #[arg(required = false, value_name = "POST-COMMAND-ARGS")]
+    post_command_args: Option<String>,
     /// Copy tag instead of password to clipboard
     #[arg(required = false, long)]
     _tag: bool,
@@ -484,7 +490,17 @@ impl App {
                 } else {
                     entry.password.clone()
                 };
-                let mut command = Command::new("wl-copy").arg(target).spawn().unwrap();
+
+                let mut command = if let Some(command) = &args.command {
+                    let mut args_list = vec![&command, &target];
+                    if let Some(post_command_args) = &args.post_command_args {
+                        args_list.push(post_command_args);
+                    }
+                    Command::new("wl-copy").args(args_list).spawn().unwrap()
+                } else {
+                    Command::new("wl-copy").arg(target).spawn().unwrap()
+                };
+
                 let status = command.wait().unwrap();
                 if status.success() {
                     println!("Password copied successfully to clipboard!");
